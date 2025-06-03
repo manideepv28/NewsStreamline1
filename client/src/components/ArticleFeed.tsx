@@ -1,11 +1,9 @@
-import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { RefreshCw, Grid3X3, AlertCircle } from "lucide-react";
+import { useState, useMemo } from "react";
+import { RefreshCw, Grid3X3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
-import { queryClient } from "@/lib/queryClient";
 import ArticleCard from "./ArticleCard";
 import { type Article, type Category, type DateFilter } from "@/lib/newsApi";
+import { mockArticles } from "@/data/mockArticles";
 
 interface ArticleFeedProps {
   selectedCategory: Category | "all";
@@ -14,42 +12,52 @@ interface ArticleFeedProps {
 
 export default function ArticleFeed({ selectedCategory, selectedDateFilter }: ArticleFeedProps) {
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const { data: articles = [], isLoading, error, refetch } = useQuery<Article[]>({
-    queryKey: ["/api/articles/filter", selectedCategory, selectedDateFilter],
-    queryFn: async () => {
-      const params = new URLSearchParams();
-      if (selectedCategory !== "all") {
-        params.append("category", selectedCategory);
-      }
-      if (selectedDateFilter !== "all") {
-        params.append("date", selectedDateFilter);
-      }
-      
-      const response = await fetch(`/api/articles/filter?${params.toString()}`);
-      if (!response.ok) {
-        throw new Error("Failed to fetch articles");
-      }
-      return response.json();
-    }
-  });
+  const articles = useMemo(() => {
+    let filteredArticles = mockArticles;
 
-  const refreshMutation = useMutation({
-    mutationFn: async () => {
-      const response = await fetch("/api/articles/refresh", { method: "POST" });
-      if (!response.ok) {
-        throw new Error("Failed to refresh articles");
-      }
-      return response.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/articles"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/articles/filter"] });
+    // Filter by category
+    if (selectedCategory !== "all") {
+      filteredArticles = filteredArticles.filter(article => article.category === selectedCategory);
     }
-  });
+
+    // Filter by date
+    if (selectedDateFilter !== "all") {
+      const now = new Date();
+      let filterDate: Date;
+
+      switch (selectedDateFilter) {
+        case "today":
+          filterDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+          break;
+        case "week":
+          filterDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          break;
+        case "month":
+          filterDate = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+          break;
+        default:
+          filterDate = new Date(0);
+      }
+
+      filteredArticles = filteredArticles.filter(
+        article => new Date(article.publishedAt) >= filterDate
+      );
+    }
+
+    // Sort by published date (newest first)
+    return filteredArticles.sort(
+      (a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
+    );
+  }, [selectedCategory, selectedDateFilter]);
 
   const handleRefresh = () => {
-    refreshMutation.mutate();
+    setIsRefreshing(true);
+    // Simulate refresh delay
+    setTimeout(() => {
+      setIsRefreshing(false);
+    }, 1000);
   };
 
   const toggleViewMode = () => {
@@ -58,7 +66,7 @@ export default function ArticleFeed({ selectedCategory, selectedDateFilter }: Ar
 
   const getLastUpdated = () => {
     if (articles.length > 0) {
-      const latest = new Date(Math.max(...articles.map(a => new Date(a.publishedAt).getTime())));
+      const latest = new Date(Math.max(...articles.map((a: Article) => new Date(a.publishedAt).getTime())));
       const now = new Date();
       const diffInMinutes = Math.floor((now.getTime() - latest.getTime()) / (1000 * 60));
       
@@ -72,29 +80,13 @@ export default function ArticleFeed({ selectedCategory, selectedDateFilter }: Ar
     return "No updates available";
   };
 
-  if (error) {
-    return (
-      <div className="bg-red-50 border border-red-200 rounded-xl p-8 text-center">
-        <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
-        <h3 className="text-lg font-semibold text-red-800 mb-2">Unable to Load Articles</h3>
-        <p className="text-red-600 mb-4">There was a problem fetching the latest news. Please try again.</p>
-        <Button 
-          onClick={() => refetch()}
-          className="bg-red-600 text-white hover:bg-red-700"
-        >
-          Try Again
-        </Button>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6">
       {/* Article Stats */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center space-x-3">
           <h3 className="text-lg font-semibold text-slate-900">
-            {isLoading ? "Loading..." : `${articles.length} Articles Found`}
+            {`${articles.length} Articles Found`}
           </h3>
           <span className="text-sm text-slate-500">{getLastUpdated()}</span>
         </div>
@@ -103,11 +95,11 @@ export default function ArticleFeed({ selectedCategory, selectedDateFilter }: Ar
             variant="ghost"
             size="sm"
             onClick={handleRefresh}
-            disabled={refreshMutation.isPending}
+            disabled={isRefreshing}
             className="p-2 text-slate-600 hover:text-blue-600 transition-colors"
             title="Refresh"
           >
-            <RefreshCw className={`h-4 w-4 ${refreshMutation.isPending ? "animate-spin" : ""}`} />
+            <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
           </Button>
           <Button
             variant="ghost"
@@ -121,28 +113,8 @@ export default function ArticleFeed({ selectedCategory, selectedDateFilter }: Ar
         </div>
       </div>
 
-      {/* Loading State */}
-      {isLoading && (
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {[...Array(6)].map((_, i) => (
-            <div key={i} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-              <Skeleton className="w-full h-48" />
-              <div className="p-5 space-y-3">
-                <div className="flex items-center space-x-3">
-                  <Skeleton className="w-16 h-4" />
-                  <Skeleton className="w-20 h-4" />
-                </div>
-                <Skeleton className="w-full h-6" />
-                <Skeleton className="w-4/5 h-6" />
-                <Skeleton className="w-full h-12" />
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
       {/* Articles */}
-      {!isLoading && articles.length > 0 && (
+      {articles.length > 0 && (
         <>
           {/* Featured Article */}
           {articles[0] && (
@@ -152,7 +124,7 @@ export default function ArticleFeed({ selectedCategory, selectedDateFilter }: Ar
           {/* Regular Articles */}
           {articles.length > 1 && (
             <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {articles.slice(1).map((article) => (
+              {articles.slice(1).map((article: Article) => (
                 <ArticleCard key={article.id} article={article} />
               ))}
             </div>
@@ -161,7 +133,7 @@ export default function ArticleFeed({ selectedCategory, selectedDateFilter }: Ar
       )}
 
       {/* Empty State */}
-      {!isLoading && articles.length === 0 && (
+      {articles.length === 0 && (
         <div className="bg-slate-50 border border-slate-200 rounded-xl p-8 text-center">
           <div className="text-4xl mb-4">📰</div>
           <h3 className="text-lg font-semibold text-slate-900 mb-2">No Articles Found</h3>
